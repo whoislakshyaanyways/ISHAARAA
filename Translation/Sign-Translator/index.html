@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CogniSign</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>CogniSign</h1>
+  <span class="sub">SIGN &harr; EN / HI / KN &middot; in-browser</span>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">camera off</span></div>
+</header>
+
+<nav role="tablist">
+  <button role="tab" aria-selected="true" data-tab="train">1 &middot; TRAIN</button>
+  <button role="tab" aria-selected="false" data-tab="sign">2 &middot; SIGN &rarr; SPEECH</button>
+  <button role="tab" aria-selected="false" data-tab="avatar">3 &middot; TEXT &rarr; SIGN</button>
+  <button role="tab" aria-selected="false" data-tab="speech">SPEECH &rarr; TEXT</button>
+  <button role="tab" aria-selected="false" data-tab="about">MODEL</button>
+</nav>
+
+<!-- shared camera card: moved into whichever tab is active -->
+<div id="cameraHome" hidden>
+  <div class="card" id="cameraCard">
+    <h2>Camera</h2>
+    <div class="stage">
+      <video id="vid" playsinline muted></video>
+      <div class="overlay">
+        model <b id="modelFlag" class="no">not loaded</b><br>
+        <span id="fps">-- fps</span>
+      </div>
+      <div class="recording" id="recFlag" hidden>&#9679; REC <span id="recWord"></span></div>
+    </div>
+    <div class="row">
+      <button class="act" id="btnCam">Start camera</button>
+    </div>
+    <div id="camErr"></div>
+  </div>
+</div>
+
+<!-- ============================================ TRAIN -->
+<section class="panel on" id="tab-train">
+  <div class="grid">
+    <div class="slot"></div>
+    <div class="card">
+      <h2>Your signs</h2>
+      <p class="note" style="margin-top:0">Hold <b>Record</b> while performing a sign
+      (aim for 30+ examples each). Record <b>IDLE</b> with your hands down &mdash; it
+      tells the model when you are <em>not</em> signing.</p>
+      <div id="wordList" class="words"></div>
+      <form id="addWord" class="row" autocomplete="off">
+        <input type="text" id="newWord" placeholder="Add a word, e.g. water / पानी / ನೀರು">
+        <button class="act" type="submit">Add</button>
+      </form>
+      <div id="trainErr"></div>
+      <div class="row">
+        <button class="ghost" id="btnGoSign">Done &rarr; start signing</button>
+        <button class="ghost" id="btnResetTraining">Reset all training</button>
+      </div>
+      <p class="note" id="trainNote"></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ SIGN -> SPEECH -->
+<section class="panel" id="tab-sign">
+  <div class="grid">
+    <div class="slot"></div>
+    <div class="card">
+      <h2>Detected words</h2>
+      <div class="chips" id="chips"></div>
+      <div class="live-pred">
+        <span id="livePred">waiting for signs</span>
+        <div class="bar"><i id="liveBar" style="width:0"></i></div>
+      </div>
+      <h2 style="margin-top:16px">Sentence</h2>
+      <div class="out empty" id="sentence">Sign to begin. Return to idle for a moment to end a sentence.</div>
+      <div class="row">
+        <button class="act" id="btnPredict">Start predicting</button>
+        <button class="ghost" id="btnSpeak">Speak aloud</button>
+        <button class="ghost" id="btnClear">Clear</button>
+        <select id="lang" aria-label="Speech language">
+          <option value="en">English</option>
+          <option value="hi">हिन्दी</option>
+          <option value="kn">ಕನ್ನಡ</option>
+        </select>
+      </div>
+      <label class="check"><input type="checkbox" id="autoSpeak" checked> Speak each sentence automatically</label>
+      <label class="check"><input type="checkbox" id="listenReply"> Listen for a spoken reply afterwards (e.g. from Alexa)</label>
+      <div id="replyBox" hidden>
+        <h2 style="margin-top:14px">Reply</h2>
+        <div class="out empty" id="reply">listening&hellip;</div>
+      </div>
+      <div id="signErr"></div>
+      <p class="note">A word is accepted only above 90% confidence, held steady across
+      3 consecutive frames. Holding IDLE for 1.5s closes the sentence and speaks it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ TEXT -> SIGN (avatar) -->
+<section class="panel" id="tab-avatar">
+  <div class="grid">
+    <div class="card">
+      <h2>Signing avatar</h2>
+      <div class="stage avatar-stage" id="avatarStage">
+        <div class="overlay">drag to turn &middot; double-click to reset</div>
+        <div class="caption" id="avatarCaption"></div>
+      </div>
+      <div class="row">
+        <button class="ghost" id="btnReplaySign">Replay</button>
+        <button class="ghost" id="btnStopSign">Stop</button>
+        <select id="signSpeed" aria-label="Signing speed">
+          <option value="0.6">0.6&times; speed</option>
+          <option value="0.8">0.8&times; speed</option>
+          <option value="1" selected>1&times; speed</option>
+          <option value="1.25">1.25&times; speed</option>
+        </select>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Type or say a sentence</h2>
+      <input type="text" id="signInput" placeholder="Where is the hospital?">
+      <div class="row">
+        <button class="act" id="btnSignIt">Sign it</button>
+        <button class="ghost" id="btnSignMic">Dictate</button>
+        <select id="signLang" aria-label="Dictation language">
+          <option value="en">English</option>
+          <option value="hi">हिन्दी</option>
+          <option value="kn">ಕನ್ನಡ</option>
+        </select>
+      </div>
+      <label class="check"><input type="checkbox" id="speakWhileSigning" checked> Speak the sentence while signing</label>
+      <h2 style="margin-top:16px">Try</h2>
+      <div class="examples" id="signExamples">
+        <button class="ghost">Hello, what is your name?</button>
+        <button class="ghost">Namaste, thank you</button>
+        <button class="ghost">Where is the hospital?</button>
+        <button class="ghost">I need water please</button>
+        <button class="ghost">I don't understand</button>
+        <button class="ghost">My name is Asha</button>
+        <button class="ghost">नमस्ते, मुझे पानी चाहिए</button>
+      </div>
+      <h2 style="margin-top:16px">Signs</h2>
+      <div class="chips" id="signChips"></div>
+      <div id="avatarErr"></div>
+      <p class="note">Articles and helper words (is, the, a&hellip;) are dropped, as in sign
+      grammar. Words outside the dictionary are fingerspelled letter by letter
+      (dashed chips). Signs are illustrative approximations.</p>
+      <h2 style="margin-top:14px">Dictionary &middot; <span id="signDictCount"></span> signs</h2>
+      <div class="vocab dict" id="signDict"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ SPEECH -> TEXT -->
+<section class="panel" id="tab-speech">
+  <div class="grid">
+    <div class="card">
+      <h2>Listen</h2>
+      <div class="row" style="margin-top:0">
+        <button class="act" id="btnMic">Start listening</button>
+        <select id="lang2" aria-label="Recognition language">
+          <option value="en">English</option>
+          <option value="hi">हिन्दी</option>
+          <option value="kn">ಕನ್ನಡ</option>
+        </select>
+      </div>
+      <h2 style="margin-top:16px">Transcript</h2>
+      <div class="out big empty" id="transcript">Press start and speak. The words appear here for a deaf or hard-of-hearing reader.</div>
+      <div class="row">
+        <button class="ghost" id="btnTranscriptSign">Sign this with the avatar &rarr;</button>
+        <button class="ghost" id="btnTranscriptClear">Clear</button>
+      </div>
+      <div id="speechErr"></div>
+    </div>
+    <div class="card">
+      <h2>Type to speak</h2>
+      <input type="text" id="sayText" placeholder="Type something to say out loud">
+      <div class="row">
+        <button class="act" id="btnSay">Speak</button>
+      </div>
+      <h2 style="margin-top:16px">Your signs in the transcript</h2>
+      <div class="chips" id="chips2"></div>
+      <p class="note">Words from the transcript that match a sign you trained.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ ABOUT -->
+<section class="panel" id="tab-about">
+  <div class="card">
+    <h2>Pipeline</h2>
+    <p class="note" style="font-size:12px;color:var(--dim)">
+    <b>Sign &rarr; speech:</b> webcam &rarr; 227&times;227 centre crop &rarr; SqueezeNet features &rarr; k-nearest-neighbour (k=10)
+    &rarr; word &rarr; smoothing &rarr; sentence &rarr; speechSynthesis (en-IN / hi-IN / kn-IN)<br>
+    <b>Text &rarr; sign:</b> text or speech &rarr; gloss sequence (helper words dropped, EN / HI / KN lookup)
+    &rarr; sign dictionary or fingerspelling &rarr; keyframed 3D avatar (two-bone arm IK, 15-joint hands)
+    </p>
+    <h2 style="margin-top:18px">Vocabulary</h2>
+    <div class="vocab" id="vocabList"></div>
+    <h2 style="margin-top:18px">Notes</h2>
+    <p class="note" style="font-size:12px;color:var(--dim)">
+    Everything runs in your browser; no video leaves this machine. Training is
+    few-shot: each example is stored as a feature vector and new frames are
+    classified by their 10 nearest stored examples, so adding a word needs no
+    retraining. Training is saved in this browser and restored on reload. Speech output and recognition use the browser's built-in voices &mdash;
+    Chrome is required for recognition. For Hindi or Kannada output, add words in that
+    script.
+    </p>
+    <div id="healthOut" class="note" style="font-size:11px"></div>
+  </div>
+</section>
+
+</div>
+<script src="dist/build.js"></script>
+<script type="module" src="avatar.js"></script>
+</body>
+</html>

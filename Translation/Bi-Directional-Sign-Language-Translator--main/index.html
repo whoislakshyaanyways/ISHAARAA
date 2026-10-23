@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignBridge</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<!-- MediaPipe runs in the browser so each device uses its own camera.
+     Holistic specifically: it is the model the classifier was trained on. -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+
+<style>
+:root{
+  --paper:#FFFFFF;
+  --surface:#F6F7F9;
+  --surface-2:#EDEFF3;
+  --line:#DFE3E8;
+  --ink:#16191F;
+  --ink-soft:#5B6673;
+
+  /* Colour means state. Nothing here is decoration. */
+  --live:#1D4ED8;
+  --verified:#047857;
+  --unverified:#B45309;
+
+  /* The instrument panel is dark, so data gets its own high-chroma set.
+     These only ever appear on the dark surfaces. */
+  --deep:#0C1017;
+  --deep-2:#151B24;
+  --deep-line:#232C38;
+  --deep-text:#8FA0B5;
+
+  --beam:#60A5FA;    /* landmarks, live */
+  --pass:#34D399;    /* a gate satisfied */
+  --hold:#FBBF24;    /* a gate blocking */
+  --rival:#F472B6;   /* the competing class */
+
+  --rail:232px;
+  --r:10px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+html{-webkit-text-size-adjust:100%}
+
+body{
+  font-family:'Atkinson Hyperlegible',system-ui,sans-serif;
+  background:var(--paper);
+  color:var(--ink);
+  font-size:16px;
+  line-height:1.55;
+  font-variant-numeric:tabular-nums;
+  min-height:100dvh;
+}
+
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+input,textarea{font:inherit;color:inherit}
+
+:focus-visible{outline:2px solid var(--live);outline-offset:2px;border-radius:4px}
+
+/* ─── Shell ─────────────────────────────────────────────── */
+.app{display:grid;grid-template-columns:var(--rail) 1fr;min-height:100dvh}
+
+.rail{
+  border-right:1px solid var(--line);
+  background:var(--surface);
+  display:flex;flex-direction:column;
+  position:sticky;top:0;height:100dvh;
+}
+
+.brand{padding:22px 20px 18px;border-bottom:1px solid var(--line)}
+.brand h1{font-size:19px;font-weight:700;letter-spacing:-.015em}
+.brand p{font-size:13px;color:var(--ink-soft);margin-top:2px}
+
+nav{padding:10px;display:flex;flex-direction:column;gap:2px;flex:1}
+
+.tab{
+  display:flex;align-items:center;gap:11px;
+  padding:10px 12px;border-radius:var(--r);
+  text-align:left;width:100%;
+  color:var(--ink-soft);font-size:15px;
+  transition:background .12s,color .12s;
+}
+.tab:hover{background:var(--surface-2);color:var(--ink)}
+.tab[aria-current="page"]{background:var(--paper);color:var(--ink);font-weight:700;box-shadow:inset 0 0 0 1px var(--line)}
+.tab svg{width:19px;height:19px;flex:none;stroke-width:1.6}
+
+.rail-foot{padding:14px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-soft)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ink-soft);margin-right:7px;vertical-align:1px}
+.dot.on{background:var(--verified)}
+
+/* ─── Stage ─────────────────────────────────────────────── */
+main{display:flex;flex-direction:column;min-width:0}
+
+.head{
+  padding:20px 28px;border-bottom:1px solid var(--line);
+  display:flex;align-items:baseline;justify-content:space-between;gap:20px;flex-wrap:wrap;
+}
+.head h2{font-size:21px;font-weight:700;letter-spacing:-.015em}
+.head p{font-size:14px;color:var(--ink-soft);margin-top:1px}
+
+.panel{display:none;padding:24px 28px;flex:1;min-width:0}
+.panel.on{display:block}
+
+.split{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:24px;align-items:start}
+
+/* ─── Camera ────────────────────────────────────────────── */
+/* ─── Instrument panel ──────────────────────────────────── */
+.instrument{
+  background:var(--deep);
+  border-radius:14px;
+  padding:14px;
+  display:flex;flex-direction:column;gap:14px;
+}
+
+.stage{
+  position:relative;background:#000;
+  border-radius:9px;overflow:hidden;aspect-ratio:4/3;
+  display:flex;align-items:center;justify-content:center;
+}
+.stage img,.stage canvas,.stage video{width:100%;height:100%;object-fit:contain;display:block}
+.stage canvas{position:absolute;inset:0}
+.stage .placeholder{color:#8C97A5;font-size:15px;text-align:center;padding:24px}
+
+.livetag{
+  position:absolute;top:12px;left:12px;
+  background:var(--live);color:#fff;
+  padding:4px 10px;border-radius:100px;font-size:13px;font-weight:700;
+  display:none;align-items:center;gap:7px;
+}
+.livetag.on{display:flex}
+.livetag i{width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* Four gates. A detection has to clear all of them. */
+.gates{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+
+.gate{
+  background:var(--deep-2);border:1px solid var(--deep-line);
+  border-radius:8px;padding:10px 11px;
+  transition:border-color .15s,background .15s;
+}
+.gate .name{font-size:12px;color:var(--deep-text);line-height:1.3}
+.gate .val{font-size:15px;font-weight:700;color:#5B6878;margin-top:3px}
+
+.gate.pass{border-color:var(--pass);background:rgba(52,211,153,.08)}
+.gate.pass .val{color:var(--pass)}
+.gate.hold{border-color:var(--hold);background:rgba(251,191,36,.07)}
+.gate.hold .val{color:var(--hold)}
+
+/* Raw landmarks against the normalized vector the model receives.
+   Move your hand closer and only the left view changes. */
+.invariance{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+.scope{
+  background:var(--deep-2);border:1px solid var(--deep-line);
+  border-radius:8px;padding:10px;text-align:center;
+}
+.scope canvas{width:100%;aspect-ratio:1;display:block;border-radius:5px}
+.scope .cap{font-size:12px;color:var(--deep-text);margin-top:7px;line-height:1.35}
+
+.note{font-size:12px;color:var(--deep-text);text-align:center;line-height:1.45}
+
+.controls{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap}
+
+.btn{
+  padding:9px 16px;border-radius:var(--r);
+  background:var(--ink);color:var(--paper);font-size:15px;font-weight:700;
+  transition:opacity .12s;
+}
+.btn:hover{opacity:.86}
+.btn.quiet{background:var(--paper);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+.btn.quiet:hover{background:var(--surface)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ─── Readout ───────────────────────────────────────────── */
+.card{border:1px solid var(--line);border-radius:var(--r);padding:18px}
+.card + .card{margin-top:16px}
+.card h3{font-size:15px;font-weight:700;margin-bottom:12px}
+
+.reading{font-size:54px;font-weight:700;letter-spacing:-.035em;line-height:1.05;min-height:58px}
+.reading.idle{color:var(--ink-soft);font-size:17px;font-weight:400;letter-spacing:0;line-height:1.5}
+
+.meter{height:4px;background:var(--surface-2);border-radius:100px;overflow:hidden;margin:12px 0 6px}
+.meter i{display:block;height:100%;width:0;background:var(--live);transition:width .18s}
+
+.meta{font-size:13px;color:var(--ink-soft)}
+
+.buffer{display:flex;flex-wrap:wrap;gap:6px;min-height:34px}
+.chip{background:var(--surface-2);padding:5px 11px;border-radius:100px;font-size:14px}
+.sentence{font-size:19px;line-height:1.5;min-height:30px}
+
+/* ─── Verification ──────────────────────────────────────── */
+.verify{border-left:3px solid var(--line);padding-left:14px;display:none}
+.verify.on{display:block}
+.verify.ok{border-left-color:var(--verified)}
+.verify.no{border-left-color:var(--unverified)}
+
+.badge{font-size:13px;font-weight:700;display:inline-block;margin-bottom:8px}
+.verify.ok .badge{color:var(--verified)}
+.verify.no .badge{color:var(--unverified)}
+
+.facts{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px;margin-top:10px}
+.facts dt{color:var(--ink-soft)}
+
+/* ─── Tutor ─────────────────────────────────────────────── */
+.chat{display:flex;flex-direction:column;height:min(560px,68vh);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.log{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
+
+.msg{max-width:86%;font-size:15px;line-height:1.55}
+.msg.me{align-self:flex-end;background:var(--ink);color:var(--paper);padding:10px 14px;border-radius:14px 14px 3px 14px}
+.msg.bot{align-self:flex-start}
+.msg.bot strong{font-weight:700}
+.msg.sys{align-self:center;font-size:13px;color:var(--ink-soft);text-align:center}
+
+.compose{display:flex;gap:9px;padding:13px;border-top:1px solid var(--line);background:var(--surface)}
+.compose input{flex:1;padding:10px 13px;border:1px solid var(--line);border-radius:var(--r);background:var(--paper)}
+
+.demo{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;text-align:center;display:none}
+.demo.on{display:block}
+.demo img{max-width:230px;width:100%;border-radius:8px;background:var(--paper)}
+.demo h4{font-size:17px;font-weight:700;margin-bottom:10px}
+
+.thinking{display:none;font-size:14px;color:var(--ink-soft);padding:0 18px 12px}
+.thinking.on{display:block}
+
+/* ─── Speech to sign ────────────────────────────────────── */
+.player{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:26px;text-align:center;min-height:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.player img{max-width:260px;width:100%;border-radius:8px;background:var(--paper)}
+.player .label{font-size:30px;font-weight:700}
+
+.transcript{font-size:17px;min-height:28px}
+
+/* ─── Rooms ─────────────────────────────────────────────── */
+.field{display:flex;gap:9px;margin-bottom:11px}
+.field input{flex:1;padding:10px 13px;border:1px solid var(--line);border-radius:var(--r);background:var(--paper)}
+
+.feed{display:flex;flex-direction:column;gap:11px;max-height:380px;overflow-y:auto}
+.feed .item{border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+.feed .who{font-size:13px;color:var(--ink-soft);margin-bottom:3px}
+
+.qr{display:flex;justify-content:center;padding:6px 0 12px}
+.qr img,.qr canvas{display:block;border-radius:6px}
+.qr-addr{text-align:center;font-size:15px;font-weight:700;margin-bottom:8px}
+
+.peer-sign{margin-top:10px;text-align:center}
+.peer-sign img{max-width:170px;width:100%;border-radius:8px;background:var(--surface)}
+.peer-label{display:block;font-size:17px;font-weight:700;margin-top:5px;min-height:24px}
+
+.sessions{display:flex;flex-direction:column;gap:8px}
+.session{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;
+}
+.session .name{font-weight:700}
+.session .sub{font-size:13px;color:var(--ink-soft)}
+
+/* ─── History ───────────────────────────────────────────── */
+.rows{display:flex;flex-direction:column}
+.row{display:flex;gap:16px;padding:11px 0;border-bottom:1px solid var(--line);font-size:15px}
+.row .t{color:var(--ink-soft);font-size:13px;flex:none;width:68px}
+
+.empty{color:var(--ink-soft);font-size:15px;padding:28px 0;text-align:center}
+
+/* ─── Responsive ────────────────────────────────────────── */
+@media (max-width:980px){
+  .split{grid-template-columns:1fr}
+  .gates{grid-template-columns:1fr 1fr}
+}
+
+@media (max-width:760px){
+  .app{grid-template-columns:1fr}
+  .rail{
+    position:fixed;bottom:0;top:auto;height:auto;width:100%;
+    border-right:0;border-top:1px solid var(--line);z-index:20;
+  }
+  .brand,.rail-foot{display:none}
+  nav{flex-direction:row;padding:6px;gap:0}
+  .tab{flex-direction:column;gap:3px;font-size:11px;padding:7px 2px;text-align:center}
+  .tab svg{width:21px;height:21px}
+  main{padding-bottom:76px}
+  .head,.panel{padding-left:16px;padding-right:16px}
+  .reading{font-size:30px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+<aside class="rail">
+  <div class="brand">
+    <h1>SignBridge</h1>
+    <p>Sign language translation</p>
+  </div>
+
+  <nav>
+    <button class="tab" data-panel="s2s" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 11V6a2 2 0 1 1 4 0v5M11 11V4a2 2 0 1 1 4 0v7M15 11V6a2 2 0 1 1 4 0v9a6 6 0 0 1-6 6h-2a6 6 0 0 1-6-6v-4a2 2 0 1 1 4 0"/></svg>
+      Sign to speech
+    </button>
+
+    <button class="tab" data-panel="sp">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>
+      Speech to sign
+    </button>
+
+    <button class="tab" data-panel="net">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.6 10.6 15.4 7.4M8.6 13.4l6.8 3.2"/></svg>
+      Live session
+    </button>
+
+    <button class="tab" data-panel="learn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5zM9 8h6M9 12h4"/></svg>
+      Learn
+    </button>
+
+    <button class="tab" data-panel="hist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      History
+    </button>
+  </nav>
+
+  <div class="rail-foot">
+    <span class="dot" id="connDot"></span><span id="connText">Connecting</span>
+  </div>
+</aside>
+
+<main>
+  <div class="head">
+    <div>
+      <h2 id="headTitle">Sign to speech</h2>
+      <p id="headSub">Sign to the camera. Recognised signs build into a sentence.</p>
+    </div>
+    <p class="meta" id="headMeta"></p>
+  </div>
+
+  <!-- ─── Sign to speech ─────────────────────────────── -->
+  <section class="panel on" id="p-s2s">
+    <div class="split">
+      <div>
+        <div class="instrument">
+          <div class="stage">
+            <video id="cam" playsinline muted hidden></video>
+            <canvas id="overlay"></canvas>
+            <p class="placeholder" id="feedIdle">Start the camera to begin signing.</p>
+            <div class="livetag" id="liveTag"><i></i>Live</div>
+          </div>
+
+          <div class="gates">
+            <div class="gate" id="g1">
+              <p class="name">Hands in frame</p>
+              <p class="val" id="g1v">—</p>
+            </div>
+            <div class="gate" id="g2">
+              <p class="name">Hand settled</p>
+              <p class="val" id="g2v">—</p>
+            </div>
+            <div class="gate" id="g3">
+              <p class="name">Confidence</p>
+              <p class="val" id="g3v">—</p>
+            </div>
+            <div class="gate" id="g4">
+              <p class="name">Clear of runner-up</p>
+              <p class="val" id="g4v">—</p>
+            </div>
+          </div>
+
+          <div class="invariance">
+            <div class="scope">
+              <canvas id="scopeRaw"></canvas>
+              <p class="cap">As the camera sees it</p>
+            </div>
+            <div class="scope">
+              <canvas id="scopeNorm"></canvas>
+              <p class="cap">As the model sees it</p>
+            </div>
+          </div>
+
+          <p class="note">Move your hand nearer or further. Only the left view changes.</p>
+        </div>
+
+        <div class="controls">
+          <button class="btn" id="btnStart">Start camera</button>
+          <button class="btn quiet" id="btnStop" disabled>Stop</button>
+          <button class="btn quiet" id="btnSay">Build sentence</button>
+          <button class="btn quiet" id="btnClear">Clear</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Reading</h3>
+          <p class="reading idle" id="reading">Nothing detected yet</p>
+          <div class="meter"><i id="meterFill"></i></div>
+          <p class="meta" id="readingMeta">&nbsp;</p>
+        </div>
+
+        <div class="card">
+          <h3>Signs so far</h3>
+          <div class="buffer" id="buffer"></div>
+        </div>
+
+        <div class="card">
+          <h3>Sentence</h3>
+          <p class="sentence" id="sentence"></p>
+          <p class="meta" id="sentenceMeta"></p>
+        </div>
+
+        <div class="card">
+          <h3>Verification</h3>
+          <div class="verify" id="verify">
+            <p class="badge" id="vBadge"></p>
+            <p id="vDesc"></p>
+            <dl class="facts">
+              <dt>Handshape</dt><dd id="vHand"></dd>
+              <dt>Movement</dt><dd id="vMove"></dd>
+              <dt>Location</dt><dd id="vLoc"></dd>
+              <dt>Source</dt><dd id="vSrc"></dd>
+            </dl>
+          </div>
+          <p class="meta" id="vIdle">Each detection is checked against an ASL reference.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Speech to sign ─────────────────────────────── -->
+  <section class="panel" id="p-sp">
+    <div class="split">
+      <div>
+        <div class="player">
+          <img id="spGif" alt="" hidden>
+          <p class="label" id="spLabel">Press record and speak</p>
+        </div>
+
+        <div class="controls">
+          <button class="btn" id="btnMic">Record</button>
+          <button class="btn quiet" id="btnReplay" disabled>Replay</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Heard</h3>
+          <p class="transcript" id="spText"></p>
+          <p class="meta" id="spMeta"></p>
+        </div>
+
+        <div class="card">
+          <h3>Type instead</h3>
+          <div class="field">
+            <input id="spInput" placeholder="hello thanks" autocomplete="off">
+            <button class="btn" id="btnType">Show</button>
+          </div>
+          <p class="meta">Words without an animation are fingerspelled.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Live session ───────────────────────────────── -->
+  <section class="panel" id="p-net">
+    <div class="split">
+      <div>
+        <div class="card" id="openCard">
+          <h3>Open a session</h3>
+          <div class="field">
+            <input id="myName" placeholder="Your name" autocomplete="off">
+            <button class="btn" id="btnOpen">Open</button>
+          </div>
+          <p class="meta">A code appears as a QR. The other person scans it.</p>
+        </div>
+
+        <div class="card" id="qrCard" hidden>
+          <h3>Scan to join</h3>
+          <div class="qr"><div id="qrBox"></div></div>
+          <p class="qr-addr" id="qrAddr"></p>
+          <p class="meta">Point a phone camera at this. Same Wi-Fi needed.</p>
+          <div class="controls">
+            <button class="btn quiet" id="btnClose">Close session</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Sessions nearby</h3>
+          <div class="sessions" id="sessionList">
+            <p class="empty">None open.</p>
+          </div>
+          <p class="meta" id="netMeta"></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>From your peer</h3>
+        <div class="feed" id="peerFeed">
+          <p class="empty">Nothing yet.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Learn ──────────────────────────────────────── -->
+  <section class="panel" id="p-learn">
+    <div class="split">
+      <div>
+        <div class="chat">
+          <div class="log" id="tutorLog">
+            <p class="msg sys">Ask how to sign something, or say “teach me thanks”.</p>
+          </div>
+          <p class="thinking" id="tutorThinking">Thinking</p>
+          <form class="compose" id="tutorForm">
+            <input id="tutorInput" placeholder="How do I sign thank you?" autocomplete="off">
+            <button class="btn" type="submit">Send</button>
+          </form>
+        </div>
+      </div>
+
+      <div>
+        <div class="demo" id="demo">
+          <h4 id="demoName"></h4>
+          <img id="demoGif" alt="">
+        </div>
+
+        <div class="card" id="practiceCard" hidden>
+          <h3>Your turn</h3>
+          <div class="stage" style="aspect-ratio:4/3">
+            <canvas id="practiceOverlay"></canvas>
+            <p class="placeholder" id="practiceIdle">Camera starting</p>
+            <div class="livetag on"><i></i>Watching</div>
+          </div>
+          <div class="controls">
+            <button class="btn quiet" id="btnSkip">Skip this one</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Tutor</h3>
+          <p class="meta" id="tutorHealth">Checking</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── History ────────────────────────────────────── -->
+  <section class="panel" id="p-hist">
+    <div class="card">
+      <h3>This session</h3>
+      <div class="rows" id="histRows">
+        <p class="empty">Nothing recorded yet.</p>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
+
+<script>
+const socket = io();
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let history_ = [];
+let tutorHistory = [];
+let practising = false;
+let signActive = false;
+
+/* ─── Navigation ───────────────────────────────────── */
+const COPY = {
+  s2s:  ['Sign to speech', 'Sign to the camera. Recognised signs build into a sentence.'],
+  sp:   ['Speech to sign', 'Speak or type. Words play back as sign animations.'],
+  net:  ['Live session', 'Two people, one room code, translation both ways.'],
+  learn:['Learn', 'A tutor that demonstrates signs and checks your attempts.'],
+  hist: ['History', 'Everything recognised in this session.'],
+};
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => show(tab.dataset.panel));
+});
+
+function show(id){
+  document.querySelectorAll('.tab').forEach(t =>
+    t.setAttribute('aria-current', t.dataset.panel === id ? 'page' : 'false'));
+  document.querySelectorAll('.panel').forEach(p =>
+    p.classList.toggle('on', p.id === 'p-' + id));
+
+  const [title, sub] = COPY[id];
+  $('headTitle').textContent = title;
+  $('headSub').textContent = sub;
+
+  if (id === 'learn') socket.emit('tutor_status');
+  if (id === 'net') socket.emit('list_sessions');
+}
+
+/* ─── Connection ───────────────────────────────────── */
+socket.on('connect', () => {
+  $('connDot').classList.add('on');
+  $('connText').textContent = 'Connected';
+  socket.emit('get_stt_engine');
+  socket.emit('tutor_status');
+});
+
+socket.on('disconnect', () => {
+  $('connDot').classList.remove('on');
+  $('connText').textContent = 'Disconnected';
+});
+
+/* ─── Camera, in this browser ──────────────────────── */
+/* MediaPipe Holistic runs here, not on the server. Each device uses its
+   own camera, and only 126 floats per frame go over the wire. */
+
+let holistic = null, camera = null, camRunning = false;
+
+/* Wrist to origin, then divide by the furthest landmark distance.
+   Must match signbridge/normalization.py exactly — this is what makes
+   the model distance-invariant. */
+function normalizeHand(landmarks){
+  const out = new Array(63).fill(0);
+  if (!landmarks) return out;
+
+  const w = landmarks[0];
+  let max = 0;
+
+  for (let i = 0; i < 21; i++){
+    const dx = landmarks[i].x - w.x;
+    const dy = landmarks[i].y - w.y;
+    const dz = (landmarks[i].z || 0) - (w.z || 0);
+    out[i*3] = dx; out[i*3+1] = dy; out[i*3+2] = dz;
+    const d = Math.hypot(dx, dy, dz);
+    if (d > max) max = d;
+  }
+
+  if (max > 1e-6) for (let i = 0; i < 63; i++) out[i] /= max;
+  return out;
+}
+
+function onHolistic(results){
+  // Draw into whichever panel is on screen.
+  const canvas = practising ? $('practiceOverlay') : $('overlay');
+  const ctx = canvas.getContext('2d');
+  const vid = $('cam');
+
+  if (vid.videoWidth && canvas.width !== vid.videoWidth){
+    canvas.width = vid.videoWidth;
+    canvas.height = vid.videoHeight;
+  }
+
+  if (practising) $('practiceIdle').hidden = true;
+
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+  for (const hand of [results.leftHandLandmarks, results.rightHandLandmarks]){
+    if (!hand) continue;
+    drawConnectors(ctx, hand, HAND_CONNECTIONS, {color:'#1D4ED8', lineWidth:2});
+    drawLandmarks(ctx, hand, {color:'#FFFFFF', lineWidth:1, radius:2.5});
+  }
+  ctx.restore();
+
+  if (!camRunning) return;
+
+  const left = normalizeHand(results.leftHandLandmarks);
+  const right = normalizeHand(results.rightHandLandmarks);
+  const hands = !!(results.leftHandLandmarks || results.rightHandLandmarks);
+
+  // Whichever hand is present drives the invariance scopes.
+  const raw = results.rightHandLandmarks || results.leftHandLandmarks;
+  const norm = results.rightHandLandmarks ? right : left;
+
+  if (!practising) {
+    drawScope($('scopeRaw'), raw ? raw.map(p => [p.x, p.y]) : null, false);
+    drawScope($('scopeNorm'), hands ? pairsOf(norm) : null, true);
+    setGate('g1', hands, hands ? (results.leftHandLandmarks &&
+      results.rightHandLandmarks ? 'Two' : 'One') : 'None');
+  }
+
+  socket.emit('frame_features', {f: [...left, ...right], h: hands});
+}
+
+function pairsOf(flat){
+  const out = [];
+  for (let i = 0; i < 21; i++) out.push([flat[i*3], flat[i*3+1]]);
+  return out;
+}
+
+/* MediaPipe's hand skeleton, as index pairs. */
+const BONES = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],
+  [0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],
+  [5,9],[9,13],[13,17],
+];
+
+function drawScope(canvas, pts, normalized){
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const size = canvas.clientWidth || 150;
+
+  if (canvas.width !== size * dpr){
+    canvas.width = canvas.height = size * dpr;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, size, size);
+
+  ctx.fillStyle = '#0A0E14';
+  ctx.fillRect(0, 0, size, size);
+
+  if (!pts){
+    ctx.restore();
+    return;
+  }
+
+  // Raw landmarks sit in image space; normalized ones are centred on the
+  // wrist in roughly [-1, 1]. Map each into the square.
+  const to = normalized
+    ? ([x, y]) => [size/2 + x * size * 0.42, size/2 + y * size * 0.42]
+    : ([x, y]) => [x * size, y * size];
+
+  const screen = pts.map(to);
+
+  ctx.strokeStyle = normalized ? '#34D399' : '#60A5FA';
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+
+  for (const [a, b] of BONES){
+    ctx.beginPath();
+    ctx.moveTo(screen[a][0], screen[a][1]);
+    ctx.lineTo(screen[b][0], screen[b][1]);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = '#FFFFFF';
+  for (const [x, y] of screen){
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, 6.3);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function setGate(id, ok, text){
+  const el = $(id);
+  el.classList.toggle('pass', !!ok);
+  el.classList.toggle('hold', !ok);
+  $(id + 'v').textContent = text;
+}
+
+async function startCamera(){
+  if (!holistic){
+    holistic = new Holistic({locateFile: f =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${f}`});
+
+    holistic.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      refineFaceLandmarks: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    holistic.onResults(onHolistic);
+  }
+
+  const vid = $('cam');
+
+  camera = new Camera(vid, {
+    onFrame: async () => { await holistic.send({image: vid}); },
+    width: 640,
+    height: 480,
+    facingMode: 'user',
+  });
+
+  await camera.start();
+}
+
+/* ─── Sign to speech ───────────────────────────────── */
+$('btnStart').onclick = async () => {
+  $('btnStart').disabled = true;
+  $('feedIdle').textContent = 'Starting camera';
+
+  try {
+    await startCamera();
+  } catch (e) {
+    $('feedIdle').textContent = 'Camera unavailable: ' + e.message;
+    $('btnStart').disabled = false;
+    return;
+  }
+
+  socket.emit('start_sign_detection');
+  camRunning = true;
+  signActive = true;
+
+  $('btnStop').disabled = false;
+  $('liveTag').classList.add('on');
+  $('feedIdle').hidden = true;
+};
+
+$('btnStop').onclick = () => {
+  socket.emit('stop_sign_detection');
+  camRunning = false;
+  signActive = false;
+
+  if (camera) camera.stop();
+
+  $('btnStart').disabled = false;
+  $('btnStop').disabled = true;
+  $('liveTag').classList.remove('on');
+
+  ['g1','g2','g3','g4'].forEach(g => {
+    $(g).classList.remove('pass','hold');
+    $(g + 'v').textContent = '—';
+  });
+
+  drawScope($('scopeRaw'), null, false);
+  drawScope($('scopeNorm'), null, true);
+};
+
+$('btnClear').onclick = () => {
+  socket.emit('clear_buffer');
+  $('buffer').innerHTML = '';
+  $('sentence').textContent = '';
+  $('sentenceMeta').textContent = '';
+};
+
+$('btnSay').onclick = () => {
+  const signs = [...$('buffer').children].map(c => c.textContent);
+  if (signs.length) socket.emit('convert_gloss', {buffer: signs});
+};
+
+const WORDS = new Set(['Hello','Thanks','Yes','I LOVE YOU','No','Sorry']);
+
+socket.on('reading', d => {
+  if (practising) return;
+
+  if (d.ready < 30){
+    $('reading').textContent = `Reading ${d.ready} of 30 frames`;
+    $('reading').classList.add('idle');
+    $('meterFill').style.width = (d.ready / 30 * 100) + '%';
+    $('readingMeta').textContent = '';
+    setGate('g2', false, '—');
+    setGate('g3', false, '—');
+    setGate('g4', false, '—');
+  } else if (d.word){
+    $('reading').textContent = d.word;
+    $('reading').classList.remove('idle');
+    $('meterFill').style.width = d.conf + '%';
+    $('readingMeta').textContent =
+      d.conf.toFixed(1) + '% · ' + (d.still ? 'hand steady' : 'moving');
+
+    // Gates, in the order the server applies them.
+    setGate('g2', d.still, d.still ? 'Steady' : 'Moving');
+
+    const need = WORDS.has(d.word) ? 75 : 92;
+    setGate('g3', d.conf >= need, `${d.conf.toFixed(0)} of ${need}`);
+
+    const top = d.top3 || [];
+    const gap = top.length > 1 ? top[0][1] - top[1][1] : 0;
+    setGate('g4', gap >= 25,
+      top.length > 1 ? `${gap.toFixed(0)} over ${top[1][0]}` : '—');
+  }
+
+  renderBuffer(d.buffer || []);
+});
+
+socket.on('sign_detected', d => {
+  if (practising) {
+    practising = false;
+    camRunning = false;
+    if (camera) camera.stop();
+    $('practiceCard').hidden = true;
+    socket.emit('stop_sign_detection');
+    socket.emit('tutor_attempt', {detected: d.word, confidence: d.conf});
+    return;
+  }
+
+  renderBuffer(d.buffer);
+  addHistory(d.word, d.conf);
+});
+
+function renderBuffer(items){
+  $('buffer').innerHTML = items
+    .map(s => `<span class="chip">${esc(s)}</span>`).join('');
+}
+
+socket.on('gloss_result', d => {
+  $('sentence').textContent = d.sentence || '';
+  $('sentenceMeta').textContent = d.method ? 'Built by ' + d.method : '';
+  if (d.sentence && 'speechSynthesis' in window) {
+    speechSynthesis.speak(new SpeechSynthesisUtterance(d.sentence));
+  }
+});
+
+socket.on('sign_verified', d => {
+  const box = $('verify');
+  box.classList.add('on');
+  box.classList.toggle('ok', !!d.verified);
+  box.classList.toggle('no', !d.verified);
+
+  $('vIdle').hidden = true;
+  $('vBadge').textContent = d.verified ? 'Verified ASL sign' : 'Not verified';
+  $('vDesc').textContent = d.description || '';
+  $('vHand').textContent = d.handshape || '—';
+  $('vMove').textContent = d.movement || '—';
+  $('vLoc').textContent = d.location || '—';
+  $('vSrc').textContent = d.source || '—';
+});
+
+/* ─── Speech to sign ───────────────────────────────── */
+let recorder = null, chunks = [], recording = false, lastSeq = [];
+
+$('btnMic').onclick = async () => {
+  if (recording) return stopRecording();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    recorder = new MediaRecorder(stream);
+    chunks = [];
+
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const reader = new FileReader();
+      reader.onloadend = () =>
+        socket.emit('transcribe_audio', {audio: reader.result});
+      reader.readAsDataURL(new Blob(chunks, {type: 'audio/webm'}));
+    };
+
+    recorder.start();
+    recording = true;
+    $('btnMic').textContent = 'Stop recording';
+    $('spLabel').textContent = 'Listening';
+  } catch (e) {
+    $('spMeta').textContent = 'Microphone unavailable: ' + e.message;
+  }
+};
+
+function stopRecording(){
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  recording = false;
+  $('btnMic').textContent = 'Record';
+  $('spLabel').textContent = 'Transcribing';
+}
+
+$('btnType').onclick = () => {
+  const text = $('spInput').value.trim();
+  if (text) socket.emit('speech_to_sign', {text});
+};
+
+$('spInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('btnType').click();
+});
+
+$('btnReplay').onclick = () => playSequence(lastSeq);
+
+socket.on('transcribe_status', d => { $('spMeta').textContent = d.msg; });
+
+socket.on('transcribe_result', d => {
+  $('spText').textContent = d.text || '';
+  $('spMeta').textContent = d.error
+    ? d.error
+    : `${d.engine || ''}${d.latency_ms ? ' · ' + d.latency_ms + ' ms' : ''}`;
+  if (d.sequence?.length) playSequence(d.sequence);
+  else $('spLabel').textContent = 'Nothing recognised';
+});
+
+socket.on('sign_sequence', d => {
+  $('spText').textContent = d.original || '';
+  playSequence(d.sequence || []);
+});
+
+socket.on('stt_engine_info', d => {
+  $('headMeta').textContent = d.offline
+    ? `Speech recognition runs on this machine (${d.model})`
+    : `Speech recognition: ${d.model}`;
+});
+
+function playSequence(seq){
+  if (!seq.length) return;
+  lastSeq = seq;
+  $('btnReplay').disabled = false;
+
+  let i = 0;
+  const step = () => {
+    if (i >= seq.length) {
+      $('spLabel').textContent = 'Done';
+      return;
+    }
+    const item = seq[i++];
+    $('spGif').src = item.path + '?t=' + Date.now();
+    $('spGif').hidden = false;
+    $('spLabel').textContent = item.label;
+    setTimeout(step, item.type === 'word' ? 2600 : 1800);
+  };
+  step();
+}
+
+/* ─── Live session ─────────────────────────────────── */
+let qr = null;
+
+$('btnOpen').onclick = () =>
+  socket.emit('open_session', {name: $('myName').value || 'Host'});
+
+$('btnClose').onclick = () => {
+  socket.emit('leave_session');
+  $('qrCard').hidden = true;
+  $('openCard').hidden = false;
+};
+
+socket.on('session_opened', d => {
+  const url = `http://${d.address}/?join=${d.code}`;
+
+  $('openCard').hidden = true;
+  $('qrCard').hidden = false;
+  $('qrAddr').textContent = d.address;
+  $('qrBox').innerHTML = '';
+
+  qr = new QRCode($('qrBox'), {
+    text: url, width: 190, height: 190,
+    colorDark: '#16191F', colorLight: '#FFFFFF',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+
+  $('netMeta').textContent = 'Waiting for someone to join.';
+});
+
+socket.on('session_joined', d => {
+  $('netMeta').textContent = `Connected to ${d.host}.`;
+});
+
+socket.on('session_error', d => { $('netMeta').textContent = d.msg; });
+socket.on('session_left',  () => { $('netMeta').textContent = 'Session ended.'; });
+socket.on('peer_joined',   d => { $('netMeta').textContent = d.msg; });
+socket.on('peer_disconnected', d => { $('netMeta').textContent = d.msg; });
+
+socket.on('sessions', d => {
+  const list = $('sessionList');
+
+  if (!d.sessions.length) {
+    list.innerHTML = '<p class="empty">None open.</p>';
+    return;
+  }
+
+  list.innerHTML = d.sessions.map(s => `
+    <div class="session">
+      <div>
+        <p class="name">${esc(s.host)}</p>
+        <p class="sub">${s.full ? 'Full' : 'Waiting for one more'}</p>
+      </div>
+      <button class="btn quiet" data-join="${esc(s.code)}"
+        ${s.full ? 'disabled' : ''}>Join</button>
+    </div>`).join('');
+
+  list.querySelectorAll('[data-join]').forEach(btn => {
+    btn.onclick = () => socket.emit('join_session', {
+      code: btn.dataset.join,
+      name: $('myName').value || 'Guest',
+    });
+  });
+});
+
+// Arriving from a scanned QR: join straight away.
+const joinCode = new URLSearchParams(location.search).get('join');
+if (joinCode) {
+  socket.on('connect', () => {
+    show('net');
+    socket.emit('join_session', {
+      code: joinCode,
+      name: $('myName').value || 'Guest',
+    });
+  });
+}
+
+socket.on('peer_sign',   d => addPeer(d.from, d.sentence, null));
+socket.on('peer_speech', d => addPeer(d.from, d.text, d.sequence));
+
+function addPeer(who, text, sequence){
+  const feed = $('peerFeed');
+  feed.querySelector('.empty')?.remove();
+
+  const el = document.createElement('div');
+  el.className = 'item';
+  el.innerHTML = `<p class="who">${esc(who)}</p><p>${esc(text)}</p>`;
+
+  // Speech from a peer arrives with its sign animations. Play them here
+  // rather than making them read the words.
+  if (sequence?.length){
+    const stage = document.createElement('div');
+    stage.className = 'peer-sign';
+    stage.innerHTML = `<img alt=""><span class="peer-label"></span>`;
+    el.append(stage);
+    playInto(stage, sequence);
+  }
+
+  feed.prepend(el);
+}
+
+function playInto(stage, sequence){
+  const img = stage.querySelector('img');
+  const label = stage.querySelector('.peer-label');
+  let i = 0;
+
+  const step = () => {
+    if (i >= sequence.length){
+      label.textContent = '';
+      return;
+    }
+    const item = sequence[i++];
+    img.src = item.path + '?t=' + Date.now();
+    label.textContent = item.label;
+    setTimeout(step, item.type === 'word' ? 2400 : 1600);
+  };
+
+  step();
+}
+
+/* ─── Learn ────────────────────────────────────────── */
+$('tutorForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const text = $('tutorInput').value.trim();
+  if (!text) return;
+
+  addMsg('me', text);
+  tutorHistory.push({role: 'user', content: text});
+  $('tutorInput').value = '';
+
+  socket.emit('tutor_message', {text, history: tutorHistory});
+});
+
+socket.on('tutor_thinking', () => $('tutorThinking').classList.add('on'));
+
+socket.on('tutor_reply', d => {
+  $('tutorThinking').classList.remove('on');
+  addMsg('bot', d.reply);
+  tutorHistory.push({role: 'assistant', content: d.reply});
+  runActions(d.actions || []);
+});
+
+socket.on('tutor_feedback', d => {
+  $('tutorThinking').classList.remove('on');
+  addMsg('bot', d.reply);
+  addMsg('sys', d.correct
+    ? `Recognised as ${d.expected}`
+    : `Recognised as ${d.detected}, expected ${d.expected}`);
+  tutorHistory.push({role: 'assistant', content: d.reply});
+  runActions(d.actions || []);
+});
+
+socket.on('tutor_skipped', () => {
+  practising = false;
+  camRunning = false;
+  if (camera) camera.stop();
+  $('practiceCard').hidden = true;
+  socket.emit('stop_sign_detection');
+  addMsg('sys', 'Skipped');
+});
+
+socket.on('tutor_health', d => {
+  $('tutorHealth').textContent = d.available
+    ? `${d.model}, ${d.signs} signs in reference`
+    : `Language model offline. Reference lookup only (${d.signs} signs).`;
+});
+
+$('btnSkip').onclick = () => socket.emit('tutor_skip');
+
+function runActions(actions){
+  actions.forEach(a => {
+    if (a.type === 'show' && a.gif) {
+      $('demo').classList.add('on');
+      $('demoName').textContent = a.sign;
+      $('demoGif').src = a.gif + '?t=' + Date.now();
+      $('demoGif').alt = `Animation of the sign for ${a.sign}`;
+    }
+
+    if (a.type === 'practice') {
+      practising = true;
+      $('practiceCard').hidden = false;
+      $('practiceIdle').hidden = false;
+
+      startCamera()
+        .then(() => {
+          camRunning = true;
+          socket.emit('start_sign_detection');
+          addMsg('sys', `Camera on. Sign ${a.sign}.`);
+        })
+        .catch(e => {
+          practising = false;
+          $('practiceCard').hidden = true;
+          addMsg('sys', 'Camera unavailable: ' + e.message);
+        });
+    }
+  });
+}
+
+function addMsg(kind, text){
+  const el = document.createElement('p');
+  el.className = 'msg ' + kind;
+  el.innerHTML = esc(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+  $('tutorLog').append(el);
+  $('tutorLog').scrollTop = $('tutorLog').scrollHeight;
+}
+
+/* ─── History ──────────────────────────────────────── */
+function addHistory(sign, conf){
+  history_.unshift({
+    sign,
+    conf,
+    at: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+  });
+
+  $('histRows').innerHTML = history_.map(h => `
+    <div class="row">
+      <span class="t">${h.at}</span>
+      <span style="flex:1">${esc(h.sign)}</span>
+      <span class="t">${h.conf.toFixed(0)}%</span>
+    </div>`).join('');
+}
+
+show('s2s');
+</script>
+</body>
+</html>
